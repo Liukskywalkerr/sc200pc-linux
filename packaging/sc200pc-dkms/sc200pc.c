@@ -103,21 +103,19 @@
 #define SC200PC_ANALOGUE_GAIN_MAX	0xf8	/* 8x coarse * 1.94x fine, as Windows clamps */
 /*
  * The driver advertises V4L2_CID_ANALOGUE_GAIN as a total gain request,
- * not as pure hardware analogue gain. Requests up to 0x80 are programmed
- * fully as analogue gain; above 0x80, the driver clamps analogue gain at
- * its true hardware maximum and spills the excess into the digital-gain
- * registers. This keeps libcamera's simple AGC working at 30 fps without
- * needing userspace changes to explicitly drive digital gain.
+ * not as pure hardware analogue gain. Requests up to 0xf8 are programmed
+ * fully as analogue gain; above that, the driver holds analogue gain at its
+ * hardware maximum (15.5x) and makes up the rest with digital gain, which
+ * the silicon caps at 8x. This keeps libcamera's simple AGC working at
+ * 30 fps without needing userspace changes to explicitly drive digital gain.
  *
  * Control scale matches the existing SC200PC helper model: gain code / 16.
- * Examples (values in between are produced smoothly via the digital-gain
- * fine register, not just the coarse steps below):
+ * Examples:
  *   0x10 = 1.0x total gain    -> analogue 1.0x, digital 1.0x
  *   0x80 = 8.0x total gain    -> analogue 8.0x, digital 1.0x
- *   0x100 = 16.0x total gain  -> analogue 8.0x, digital 2.0x
- *   0x400 = 64.0x total gain  -> analogue 8.0x, digital 8.0x
- *   0x600 = 96.0x total gain  -> analogue 8.0x, digital 8.0x coarse x 1.5x fine
- *   0x800 = 128.0x total gain -> analogue 8.0x, digital 16.0x
+ *   0xf8 = 15.5x total gain   -> analogue 15.5x, digital 1.0x
+ *   0x400 = 64.0x total gain  -> analogue 15.5x, digital ~4.1x
+ *   0x800 = 128.0x requested  -> analogue 15.5x, digital 8.0x (~124x)
  */
 #define SC200PC_TOTAL_GAIN_MAX		0x800	/* 128.0x total via analogue+digital */
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
@@ -596,13 +594,12 @@ static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
  *
  * Userspace sees a single monotonic V4L2_CID_ANALOGUE_GAIN control. The
  * driver turns that into:
- *   - analogue gain only, up to the true hardware analogue limit (0x80)
- *   - analogue gain pinned at 0x80 plus digital gain, above that limit
+ *   - analogue gain only, up to the hardware analogue limit (0xf8)
+ *   - analogue gain at that limit plus digital gain, above it
  *
- * The split is intentionally simple: once analogue gain is saturated, the
- * requested total gain code is written straight into the digital-gain path.
- * This preserves the existing helper/libcamera gain scale while giving the
- * simple AGC more headroom at fixed 30 fps.
+ * Analogue gain is quantised to the sensor's octave + fine steps, so the
+ * digital stage is computed from the analogue gain actually programmed and
+ * also absorbs that rounding.
  */
 static int sc200pc_set_total_gain(struct sc200pc *sensor, u32 gain)
 {
